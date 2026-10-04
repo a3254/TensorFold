@@ -14,6 +14,7 @@ from tensorfold.kernels import inputs
 from tensorfold.families.glm5_next.linear import Q, per_row
 from tensorfold.kernels.deepseek.v4 import moe as V4MK
 from tensorfold.kernels.deepseek.v4 import rows as RK
+from tensorfold.kernels.exl3.v1 import trellis as TR
 from tensorfold.kernels.glm.flash.v1 import kernels as K
 from tensorfold.kernels.glm.flash.v1 import moe as MK
 
@@ -143,8 +144,22 @@ class MoE:
             self._compiled = mx.compile(lambda xs, ts: self.forward(xs, ts, True))
         return self._compiled(x, ids)
 
+    def exl3_experts(self, x: mx.array, idx: mx.array) -> mx.array:
+        """Rows x [R, D] through EXL3 experts idx [R, k]: grouped once, each matrix one call, every row its own bits."""
+
+        rows, top = (int(v) for v in idx.shape)
+        pick = idx.reshape(-1).astype(mx.int32)
+        group = TR.groups(pick, self.gate.count)
+        g = self.gate(x, pick, group, div=top, members=rows)
+        u = self.up(x, pick, group, div=top, members=rows)
+        y = self.down(swiglu(g, u, self.limit), pick, group, members=rows)
+        return y.reshape(rows, top, -1)
+
     def forward(self, x: mx.array, ids: mx.array, rows_exact: bool) -> mx.array:
         rows = int(x.shape[0])
+        if getattr(self.gate, "exact_rows", False):         # EXL3 experts: prompt rows get their decode bits too
+            idx, w = self.route(self.scores(x, rows_exact), ids)
+            return self.combine(w, self.exl3_experts(x, idx), x.dtype) + self.shared(x, rows_exact)
         if rows_exact and "moe" in C.ENABLED and V4MK.fits(self, rows) and MK.router_fits(self):
             wts, uids, umem, ucount = V4MK.route(MK.router_rows(x, self), self, ids)   # bf16 read as fp32
             y = V4MK.routed(x, self, wts, uids, umem, ucount)

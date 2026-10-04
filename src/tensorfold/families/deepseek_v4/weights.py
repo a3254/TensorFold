@@ -141,6 +141,10 @@ def load_backbone(model_dir: Path, layers: int | None = None) -> DeepSeekV4:
     """The backbone (``layers``: the first few only, for probes and tests)."""
 
     raw = json.loads((model_dir / "config.json").read_text())
+    from tensorfold.families.deepseek_v4 import exl3_weights
+
+    if exl3_weights.is_exl3(raw):
+        return exl3_weights.load_backbone(model_dir, layers)
     bad = unreadable(raw)
     if bad:
         raise ValueError(f"DeepSeek-V4-Flash's Mac engine reads MLX affine 4-bit weights in groups of 64 and mxfp4 "

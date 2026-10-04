@@ -37,10 +37,14 @@ class Attention:
         self.x_proj = Q.stack([w["wq_a"], w["wkv"]])
         self.q_norm, self.kv_norm = w["q_norm"], w["kv_norm"]
         self.wq_b, self.wo_b = w["wq_b"], w["wo_b"]
-        self.wo_a_all = wo_a = w["wo_a"]
-        self.wo_a = [Q(wo_a.weight[g * self.rank:(g + 1) * self.rank], wo_a.scales[g * self.rank:(g + 1) * self.rank],
-                       wo_a.biases[g * self.rank:(g + 1) * self.rank], bits=wo_a.bits, group=wo_a.group)
-                     for g in range(self.groups)]
+        wo_a = w["wo_a"]
+        # EXL3 checkpoints store wo_a's groups as separate linears, run together by one grouped call
+        self.wo_a_grouped = None if isinstance(wo_a, Q) else wo_a
+        self.wo_a_all = wo_a if isinstance(wo_a, Q) else None
+        self.wo_a = ([wo_a] if self.wo_a_grouped is not None else
+                     [Q(wo_a.weight[g * self.rank:(g + 1) * self.rank], wo_a.scales[g * self.rank:(g + 1) * self.rank],
+                        wo_a.biases[g * self.rank:(g + 1) * self.rank], bits=wo_a.bits, group=wo_a.group)
+                      for g in range(self.groups)])
         self.sink = w["attn_sink"].astype(mx.bfloat16)              # the standard hands MLX's SDPA bf16 sinks
         self.sink32 = w["attn_sink"].astype(mx.float32)             # the decode kernel's, as DeepSeek's code keeps it
         self.compressor: Compressor | None = w.get("compressor")
@@ -75,7 +79,8 @@ class Attention:
         q = norm_rope(q, positions, self.inv_freq, eps=self.eps)
         out = [q, kv, qr]
         if self.cproj is not None:
-            if row_kernel("compressor", max(rows, 2), rows_exact) and RK.f32_rows_fits(self.cproj, rows):
+            if (row_kernel("compressor", max(rows, 2), rows_exact) and isinstance(self.cproj, Q)
+                    and RK.f32_rows_fits(self.cproj, rows)):
                 out.append(RK.qmv_rows_f32(x, self.cproj))              # bf16 in: its fp32 view loses nothing
             else:
                 out.append(per_row(self.cproj, x.astype(mx.float32), rows_exact))
@@ -88,7 +93,9 @@ class Attention:
         if not rotated:
             o = norm_rope(o, positions, self.inv_freq, norm=False, inverse=True)
         o = o.reshape(rows, self.groups, -1)
-        if rows_exact and RK.grouped_fits(self.wo_a_all, self.groups, max(rows, 2)):
+        if self.wo_a_grouped is not None:
+            u = self.wo_a_grouped(o.reshape(rows, -1))
+        elif rows_exact and RK.grouped_fits(self.wo_a_all, self.groups, max(rows, 2)):
             flat = o.reshape(rows, -1)
             u = (RK.grouped_one_row(flat, self.wo_a_all, self.groups) if rows == 1
                  else RK.qmv_rows_grouped(flat, self.wo_a_all, self.groups))

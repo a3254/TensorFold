@@ -1,4 +1,4 @@
-"""DeepSeek-V4-Flash (model_type ``deepseek_v4``): an MLX engine on a 256 GB Mac."""
+"""DeepSeek-V4-Flash (model_type ``deepseek_v4``): an MLX engine on a 256 GB Mac (MLX 4-bit) or a 128 GB one (EXL3)."""
 
 from __future__ import annotations
 
@@ -8,16 +8,18 @@ from typing import Any
 MODEL_TYPES = ("deepseek_v4",)
 TITLE = "DeepSeek-V4-Flash"
 LANES = True
-# affine 4-bit groups of 64, routed experts in mxfp4 (DeepSeek's own FP4 bytes)
-MODELS = ("mlx-community/DeepSeek-V4-Flash-4bit",)
+# affine 4-bit groups of 64, routed experts in mxfp4 (DeepSeek's own FP4 bytes); or EXL3 trellis weights at any
+# codebook and width, read by the Metal EXL3 kernels (turboderp's pack: branches 2.04bpw .. 3.04bpw)
+MODELS = ("mlx-community/DeepSeek-V4-Flash-4bit", "turboderp/DeepSeek-V4-Flash-0731-exl3")
 # DeepSeek's DSpark blocks converted (MIT); TensorFold/DeepSeek-V4-Flash-MTP-MLX holds the MTP layer the same way
 DRAFTER = "TensorFold/DeepSeek-V4-Flash-DSpark-MLX"
 KERNEL_PACKAGE = "tensorfold.kernels.deepseek.v4"
 KERNEL_VERSION = "v1"
 # the shared GLM-5.3 pieces this engine runs (hyper-connections, row linears), hashed into snapshot keys
 KERNEL_DEPENDENCIES = ("tensorfold.kernels.glm.flash.v1", "tensorfold.families.glm5_next.linear",
-                       "tensorfold.families.glm5_next.model")
-QUANT_METHODS = {"mlx": ("mlx",)}
+                       "tensorfold.families.glm5_next.model", "tensorfold.kernels.exl3.v1")
+QUANT_METHODS = {"mlx": ("mlx", "exl3")}
+EXL3_VARIANT = "any"
 # buffers of 200 ops and 200 MB, so a prompt chunk's memory frees as it runs; no TF32: row kernels repeat fp32
 MLX_ENV = {"MLX_MAX_OPS_PER_BUFFER": "200", "MLX_MAX_MB_PER_BUFFER": "200", "MLX_ENABLE_TF32": "0"}
 LEAST_MLX = (0, 32, 2)
@@ -28,12 +30,20 @@ def check(model_dir: str | Path) -> None:
 
     import sys
 
-    from tensorfold.families import OWN_MODEL_HELP, read_config
+    from tensorfold.families import OWN_MODEL_HELP, quant_method, read_config
     from tensorfold.families.deepseek_v4.config import Config
     from tensorfold.families.deepseek_v4.weights import unreadable
 
     config = read_config(model_dir)
     Config.from_dict(config)
+    if quant_method(config) == "exl3":
+        from tensorfold.cuda.exl3 import format as exl3_format
+
+        exl3_format.require_config(config, where=f"{TITLE} on Apple Silicon (MLX)", tested=MODELS[1],
+                                   help=OWN_MODEL_HELP)
+        if sys.platform == "darwin":
+            _require_mlx(LEAST_MLX)
+        return
     bad = unreadable(config)
     if bad:
         raise ValueError(f"DeepSeek-V4-Flash's Mac engine reads MLX affine 4-bit weights in groups of 64 and mxfp4 "
@@ -64,7 +74,8 @@ def load(model_dir: Path, **options: Any) -> tuple[Any, Any]:
 
     from tensorfold.families.deepseek_v4.runtime import load as load_runtime
 
-    # about 152 GB of weights on a 256 GB Mac: keep them wired, or macOS can page them out between steps
+    # about 152 GB of weights on a 256 GB Mac (about 92 GB of EXL3 on a 128 GB one): keep them wired, or macOS can
+    # page them out between steps
     if mx.metal.is_available():
         limit = int(mx.device_info().get("max_recommended_working_set_size", 0))
         if limit:
@@ -96,3 +107,9 @@ def kernel_version(model: Any) -> str:
             digest.update(path.read_bytes())
     digest.update(mx.__version__.encode())
     return f"{MODEL_TYPES[0]}-{KERNEL_VERSION}-" + digest.hexdigest()[:12]
+
+
+def memory_fraction(ram_bytes: int) -> float | None:
+    """85% of RAM on a Mac of 128 GB or less, where only the EXL3 pack fits (about 85 GiB at 2.52 bpw)."""
+
+    return 0.85 if ram_bytes <= 128 * 1024**3 else None

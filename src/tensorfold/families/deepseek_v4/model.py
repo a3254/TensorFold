@@ -102,6 +102,8 @@ class DeepSeekV4:
 
     def embed_tokens(self, ids: mx.array) -> mx.array:
         e = self.embed
+        if e.bits is None:                                   # an unquantized table (EXL3 checkpoints keep it bf16)
+            return e.weight[ids]
         return mx.dequantize(e.weight[ids], e.scales[ids], e.biases[ids], group_size=e.group, bits=e.bits)
 
     def hidden(self, tokens: Any, cache: list[Any]) -> mx.array:

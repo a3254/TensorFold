@@ -41,7 +41,7 @@ class Q:
     def stack(cls, parts: list["Q"]) -> "Q | QSplit":
         """Projections of one input as one matrix (rows concatenated); parts of different formats stay separate."""
 
-        if len({(p.bits, p.group) for p in parts}) > 1:
+        if any(not isinstance(p, Q) for p in parts) or len({(p.bits, p.group) for p in parts}) > 1:
             return QSplit(parts)
         bits, group = one_format(parts)
         return cls(mx.concatenate([p.weight for p in parts]), mx.concatenate([p.scales for p in parts]),
@@ -65,6 +65,12 @@ class QSplit:
     @property
     def outs(self) -> int:
         return self.cuts[-1]
+
+    @property
+    def exact_rows(self) -> bool:
+        """Every part keeps each row's bits whatever rows share its call (EXL3 linears), so windows need no row loop."""
+
+        return all(getattr(p, "exact_rows", False) for p in self.parts)
 
     def arrays(self) -> list[mx.array]:
         return [a for p in self.parts for a in p.arrays()]
@@ -135,7 +141,7 @@ def project(x: mx.array, q: Any, *, rows_exact: bool) -> mx.array:
     """x [R, K] through a linear: one row by MLX's call, a decode window by ``qmv_rows`` where it fits, else by row."""
 
     rows = int(x.shape[0])
-    if rows == 1 or not rows_exact:
+    if rows == 1 or not rows_exact or getattr(q, "exact_rows", False):     # exact_rows: no row shares another's bits
         return q(x)
     if isinstance(q, QSplit):
         return mx.concatenate([project(x, p, rows_exact=True) for p in q.parts], axis=-1)
@@ -157,7 +163,7 @@ def bf16_if_exact(a: mx.array) -> mx.array:
 
 def per_row(fn: Any, x: mx.array, rows_exact: bool) -> mx.array:
     rows = int(x.shape[0])
-    if rows == 1 or not rows_exact:
+    if rows == 1 or not rows_exact or getattr(fn, "exact_rows", False):
         return fn(x)
     return mx.concatenate([fn(x[r:r + 1]) for r in range(rows)])
 
