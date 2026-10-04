@@ -2,8 +2,9 @@
 # Check the Metal EXL3 port on an Apple Silicon Mac and write one report to paste back.
 #
 #   tools/mac_check_exl3.sh                 # kernel tests + kernel bench (minutes)
-#   MODEL=1 tools/mac_check_exl3.sh         # also download turboderp's DeepSeek-V4-Flash EXL3 pack (~91 GB) and
-#                                           # serve + bench it (needs a 128 GB Mac; downloads once to $MODEL_DIR)
+#   MODEL=1 tools/mac_check_exl3.sh         # also serve + bench turboderp's DeepSeek-V4-Flash EXL3 pack (~91 GB, a
+#                                           # 128 GB Mac) from $MODEL_DIR, downloading it there only if it is absent
+#   MODEL=1 MODEL_DIR=/path/to/it tools/mac_check_exl3.sh   # a copy you downloaded yourself
 #
 # Run from the repo root inside the venv TensorFold is installed in (python -m pip install -e ".[test]").
 set -uo pipefail
@@ -41,12 +42,24 @@ if [ "${MODEL:-0}" != "1" ]; then
   exit 0
 fi
 
-section "download $BRANCH -> $MODEL_DIR and the MTP drafter"
-python - <<EOF
-from huggingface_hub import snapshot_download
-snapshot_download("turboderp/DeepSeek-V4-Flash-0731-exl3", revision="$BRANCH", local_dir="$MODEL_DIR")
-snapshot_download("$DRAFTER")
+if [ -f "$MODEL_DIR/config.json" ] && [ -f "$MODEL_DIR/model.safetensors.index.json" ]; then
+  section "using the checkpoint already in $MODEL_DIR (no download)"
+  python - <<EOF
+import json, pathlib
+d = pathlib.Path("$MODEL_DIR")
+want = set(json.loads((d / "model.safetensors.index.json").read_text())["weight_map"].values())
+missing = sorted(f for f in want if not (d / f).is_file())
+print("missing shards:", missing if missing else "none")
+raise SystemExit(1 if missing else 0)
 EOF
+  [ $? -eq 0 ] || exit 1
+else
+  section "download $BRANCH -> $MODEL_DIR"
+  python -c "from huggingface_hub import snapshot_download as d; \
+d('turboderp/DeepSeek-V4-Flash-0731-exl3', revision='$BRANCH', local_dir='$MODEL_DIR')"
+fi
+section "MTP drafter $DRAFTER (3.5 GB, the Hugging Face cache)"
+python -c "from huggingface_hub import snapshot_download as d; d('$DRAFTER')"
 du -sh "$MODEL_DIR"
 
 section "tensorfold info"
