@@ -166,7 +166,7 @@ _MM = r"""
     acc[r][0] = 0.0f;
     acc[r][1] = 0.0f;
   }
-  const device uint* base = T + size_t(uint(TB[e]));
+  const device uint* base = W + size_t(uint(TB[e]));
   switch (int(TK[e])) {
 CASES
     default: return;
@@ -190,7 +190,7 @@ _FINISH = r"""
   const uint lane = thread_index_in_simdgroup;
   const int blk = int(thread_position_in_grid.x) / 32;
   const int p = int(thread_position_in_grid.y);
-  const int P = int(OUT_shape[0]);
+  const int P = int(Z_shape[1]);
   const int e = EXPERTS ? int(PICK[p]) : 0;
   float v[4];
   TFX3_UNROLL
@@ -280,7 +280,7 @@ def mm(xh: Any, words: Any, tb: Any, tk: Any, k2s: tuple[int, ...], group: tuple
                       "break;" for k2 in sorted(set(k2s)))
     consts = (("K", k), ("N", n), ("SK", sk), ("RT", rt), ("MT", mt), ("CB", codebook), ("SG", SG),
               ("WIDTHS", sum(1 << v for v in set(k2s))))
-    kernel = _kernel("mm", consts, ["XH", "T", "TB", "TK", "ACT", "OFF", "MEM", "UC"], ["Z"],
+    kernel = _kernel("mm", consts, ["XH", "W", "TB", "TK", "ACT", "OFF", "MEM", "UC"], ["Z"],
                      _MM.replace("CASES", cases))
     return kernel(inputs=[xh, words, tb, tk, act, off, mem, uc], grid=(32 * SG * (n // HAD), sk, units * mt),
                   threadgroup=(32 * SG, 1, 1), output_shapes=[(sk, p, n)], output_dtypes=[mx.float32])[0]

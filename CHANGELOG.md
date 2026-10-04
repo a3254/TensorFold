@@ -3,6 +3,13 @@
 `tensorfold update` prints the sections below that are newer than the version you had. Each release's page on
 GitHub has the full notes and the measurements behind them.
 
+## Unreleased
+
+- **EXL3 checkpoints on Macs (experimental), first for DeepSeek-V4-Flash.** Metal kernels decode EXL3 trellis tiles
+  (every codebook and width) inside a grouped matmul where each row keeps its own bits, so decode windows verify
+  drafts exactly and routed experts of mixed widths run one call a matrix. `turboderp/DeepSeek-V4-Flash-0731-exl3`
+  at 2.52 bpw (91 GB) serves on a 128 GB Mac; see docs/recipes/exl3-metal.md.
+
 ## 0.6.5 (3 Oct 2026)
 
 - **Qwen3.6-35B-A3B drafts with its own MTP layer on Macs,** as on CUDA. Chains of up to four drafts are verified in

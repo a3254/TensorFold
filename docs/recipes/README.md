@@ -25,6 +25,7 @@ Quoted from the family pages, not measured per card.
 
 Contributor guides cover [adding an MLX family](adding-a-family.md),
 [adding a CUDA family](adding-a-cuda-family.md) and [CUDA implementation rules](cuda.md).
+[EXL3 on Metal](exl3-metal.md) describes the Mac's EXL3 kernels.
 [EXL3 weights](exl3.md) and [universal EXL3 experts](exl3-universal-experts.md) describe the shared EXL3
 module every CUDA family can read: any codebook, any width per tensor, one grouped launch per MoE projection.
 

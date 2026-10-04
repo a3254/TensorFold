@@ -104,6 +104,33 @@ The family keeps the default allowance, 70% of RAM for the whole process (179.2 
 weights resident the admission fits one request of 349,184 tokens; a token costs 6.7 KB of pools after the fixed
 rings. `TENSORFOLD_MEMORY_LIMIT_GB` raises the budget on a machine with nothing else loaded.
 
+## EXL3 on a 128 GB Mac (experimental)
+
+`turboderp/DeepSeek-V4-Flash-0731-exl3` keeps DeepSeek's tensor names and stores every projection as EXL3 (mul1,
+routed experts at 2-3 bits, the rest 4, the head 6). The family reads it through the [Metal EXL3
+kernels](exl3-metal.md); `exl3_weights.py` maps the names onto the same modules the MLX 4-bit checkpoint builds
+(`Exl3Linear` for each projection, `Exl3Grouped` for `wo_a`'s slices, an `Exl3Experts` stack for each routed
+matrix). The router, the indexer's head weights, the hyper-connections and the embedding stay unquantized.
+
+| Branch | Size | Fits |
+| --- | --- | --- |
+| `2.04bpw` | 82 GB | 128 GB Mac, room for long prompts |
+| `2.52bpw` | 91 GB (85 GiB) | 128 GB Mac |
+| `2.77bpw` | 107 GB | tight on 128 GB |
+| `3.04bpw` | 117 GB | 192 GB Mac and up |
+
+```bash
+python -c "from huggingface_hub import snapshot_download as d; d('turboderp/DeepSeek-V4-Flash-0731-exl3', revision='2.52bpw', local_dir='dsv4-exl3-2.52bpw')"
+tensorfold serve dsv4-exl3-2.52bpw --drafter TensorFold/DeepSeek-V4-Flash-MTP-MLX
+```
+
+On a Mac of 128 GB or less the family's allowance is 85% of RAM (108.8 GiB). macOS wires at most its recommended
+working set; if the server reports too little, `sudo sysctl iogpu.wired_limit_mb=118000` raises it until reboot.
+The drafters were converted from the original V4-Flash release, not 0731: they draft for the 0731 weights with
+lower acceptance, and the replies still equal `"draft": false` (verification uses the target). Prompt rows go
+through the decode kernels (every row its decode bits), so prefill is slower than the MLX 4-bit checkpoint's.
+`tools/mac_check_exl3.sh` runs the kernel tests, the kernel bench and (with `MODEL=1`) this checkpoint end to end.
+
 ## Not yet
 
 CUDA on two DGX Sparks and DeepSeek-V4-flash-vision-exp are not in this family yet.
